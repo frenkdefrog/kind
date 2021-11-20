@@ -237,7 +237,7 @@ create_controlplane
 create_workers
 
 # starting the cluster
-kind create cluster --name ${CLUSTERNAME} --config=$VAR
+kind create cluster --name ${CLUSTERNAME} --config=$CONFIG_YAML
 
 # adding the registry to the cluster
 apply_registry_configmap
