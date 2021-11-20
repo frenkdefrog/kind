@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script is a small tool for making easier to spin up kind kubernetes cluster with docker in your local.
 # Please mind, that having a Docker installed is a prerequisity.
@@ -9,6 +9,7 @@
 # -i eth0: what is the network interface that's IP address should be used for apiServer. It should be ONLY used, when you would like to provide remote access to this cluster for TESTING purposes. Otherwise don't provide it, the local lo interface and address will be used.
 # -p 6443: what is the port number the apiServer should listen on. It can be useful if you would like to let remote access to this kind cluster. Otherwise don't provide it, therefore, a random port number will be used.
 # -r: by passing this parameter a local docker-registry can be created and attached to the local kind cluster.
+# -e 80,443: you can pass those ports you would like to map/forward to the cluster
 
 
 #======================================================================#
@@ -23,18 +24,18 @@ show_help () {
    echo
    echo "Syntax: createCluster [-h|n|i|p]"
    echo "options:"
-   echo "h     Print this Help."
-   echo "w     The number of the workers"
-   echo "i     Interface name of your local. The kind cluster serverApi will listen on its ip address"
-   echo "p     The port number the serverApi will listen on."
-   echo "n     The name of your cluster."
-   echo "r     Create/connect to a docker registry for the cluster. It will be created with the name of kind-registry and will listen on port 5000."
-   echo "      If you would like to create a registry, plese make sure that the prerequisites are presented:"
-   echo "      1. apache2-utils is installed"
-   echo "      2. you created a directory for the registry data in /srv/docker/local_registry/{data,auth}"
-   echo "      3. you created at least on username and password using apache2-utils, and the .htpasswd file is located in /srv/docker/local_registry/auth"
+   echo "-h     Print this Help."
+   echo "-w     The number of the workers"
+   echo "-i     Interface name of your local. The kind cluster serverApi will listen on its ip address"
+   echo "-p     The port number the serverApi will listen on."
+   echo "-n     The name of your cluster."
+   echo "-r     Create/connect to a docker registry for the cluster. It will be created with the name of kind-registry and will listen on port 5000."
+   echo "       If you would like to create a registry, plese make sure that the prerequisites are presented:"
+   echo "       1. apache2-utils is installed"
+   echo "       2. you created a directory for the registry data in /srv/docker/local_registry/{data,auth}"
+   echo "       3. you created at least on username and password using apache2-utils, and the .htpasswd file is located in /srv/docker/local_registry/auth"
    echo "         htpasswd -Bc /srv/docker/local_registry/auth/registry.password [username]"
-   echo
+   echo "-e     You can pass all those TCP ports here separated by comma  you would like to map to the cluster"
    echo "If none of this paramaters are set up, then the cluster will have the default values. (name=kind, ipAddress: 127.0.0.1, port: random number)"
    echo
    exit 0
@@ -130,6 +131,20 @@ cat << EOF >> ${CONFIG_YAML}
     - hostPath: ${DOCKER_DIR}/${CLUSTERNAME}
       containerPath: /kube
 EOF
+if [ ! -z $PORTSMAPPING ]; then
+cat << EOF >> ${CONFIG_YAML}
+  extraPortMappings:
+EOF
+
+for i in ${PORTSMAPPING//,/ }
+    do
+    cat << EOF >> ${CONFIG_YAML}
+  - containerPort: ${i}
+    hostPort: ${i}
+    protocol: TCP
+EOF
+done
+fi
 
 }
 
@@ -199,24 +214,27 @@ fi
 
 # checking the main components
 DOCKER_DIR="/srv/docker"
-VERSION="v1.20.2"
+VERSION="v1.21.1"
 REQUIRED_PKG="apache2-utils"
 LOCAL_REGISTRY_DIR="${DOCKER_DIR}/local_registry"
 LOCAL_REGISTRY_NAME='kind-registry'
 LOCAL_REGISTRY_PORT='5000'
 
 
-while getopts n:w:i:p:hr flag
+while getopts e:n:w:i:p:hr flag
 do
     case "${flag}" in
         n) CLUSTERNAME=${OPTARG};;
         i) IFACE=${OPTARG};;
         p) PORTNUMBER=${OPTARG};;
         w) WORKERS=${OPTARG} ;;
-	h) help ;;
-	r) REGISTRY=1 ;;
+    	h) show_help ;;
+	    r) REGISTRY=1 ;;
+        e) PORTSMAPPING=${OPTARG} ;;
     esac
 done
+
+
 
 if [ -z ${CLUSTERNAME} ]; then
 	CLUSTERNAME="kind"
@@ -238,7 +256,12 @@ create_workers
 
 # starting the cluster
 kind create cluster --name ${CLUSTERNAME} --config=$CONFIG_YAML
-
+if [ "$?" -ne "0" ]; then
+    echo 
+    UNICORN='\U1F984';
+    echo -e "Oops, the ${UNICORN} is sad because something bad happened. Check the logs, fix the issue and try to rerun this script again... Exiting..."
+    exit 1
+fi
 # adding the registry to the cluster
 apply_registry_configmap
 
