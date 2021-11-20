@@ -1,12 +1,15 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # This script is a small tool for making easier to spin up kind kubernetes cluster with docker in your local.
 # Please mind, that having a Docker installed is a prerequisity.
 # It can handle the following arguments and options:
+# -h prints the help
+# -w number: how many worker nodes should be added to the cluster
 # -n test: what should be the name of the newly created cluster
 # -i eth0: what is the network interface that's IP address should be used for apiServer. It should be ONLY used, when you would like to provide remote access to this cluster for TESTING purposes. Otherwise don't provide it, the local lo interface and address will be used.
 # -p 6443: what is the port number the apiServer should listen on. It can be useful if you would like to let remote access to this kind cluster. Otherwise don't provide it, therefore, a random port number will be used.
 # -r: by passing this parameter a local docker-registry can be created and attached to the local kind cluster.
+# -e 80,443: you can pass those ports you would like to map/forward to the cluster
 
 
 #======================================================================#
@@ -21,17 +24,18 @@ show_help () {
    echo
    echo "Syntax: createCluster [-h|n|i|p]"
    echo "options:"
-   echo "h     Print this Help."
-   echo "i     Interface name of your local. The kind cluster serverApi will listen on its ip address"
-   echo "p     The port number the serverApi will listen on."
-   echo "n     The name of your cluster."
-   echo "r     Create/connect to a docker registry for the cluster. It will be created with the name of kind-registry and will listen on port 5000."
-   echo "      If you would like to create a registry, plese make sure that the prerequisites are presented:"
-   echo "      1. apache2-utils is installed"
-   echo "      2. you created a directory for the registry data in /srv/docker/local_registry/{data,auth}"
-   echo "      3. you created at least on username and password using apache2-utils, and the .htpasswd file is located in /srv/docker/local_registry/auth"
+   echo "-h     Print this Help."
+   echo "-w     The number of the workers"
+   echo "-i     Interface name of your local. The kind cluster serverApi will listen on its ip address"
+   echo "-p     The port number the serverApi will listen on."
+   echo "-n     The name of your cluster."
+   echo "-r     Create/connect to a docker registry for the cluster. It will be created with the name of kind-registry and will listen on port 5000."
+   echo "       If you would like to create a registry, plese make sure that the prerequisites are presented:"
+   echo "       1. apache2-utils is installed"
+   echo "       2. you created a directory for the registry data in /srv/docker/local_registry/{data,auth}"
+   echo "       3. you created at least on username and password using apache2-utils, and the .htpasswd file is located in /srv/docker/local_registry/auth"
    echo "         htpasswd -Bc /srv/docker/local_registry/auth/registry.password [username]"
-   echo
+   echo "-e     You can pass all those TCP ports here separated by comma  you would like to map to the cluster"
    echo "If none of this paramaters are set up, then the cluster will have the default values. (name=kind, ipAddress: 127.0.0.1, port: random number)"
    echo
    exit 0
@@ -46,10 +50,6 @@ check_dockerdir(){
 }
 
 create_registry (){
-
-    # setting local variables
-	reg_name='kind-registry'
-	reg_port='5000'
 
     #checking if apache2-utils is represented. If not, it tries to install it, otherwise docker registry auth can not be set.
 	pkg_ok=$(dpkg-query -W --showformat='${Status}\n' ${REQUIRED_PKG}|grep "install ok installed")
@@ -107,62 +107,71 @@ create_registry (){
 }
 
 
-#=======================================================================================#
-#===================================== MAIN PART========================================#
-#=======================================================================================#
+create_workers (){
+if [[ ! -z ${WORKERS} && "${WORKERS}" -gt "0" ]]; then
+    for i in $(seq 1 ${WORKERS})
+        do
+            cat << EOF >> ${CONFIG_YAML}
+- role: worker
+  image: kindest/node:${VERSION}
+  extraMounts:
+    - hostPath: ${DOCKER_DIR}/${CLUSTERNAME}
+      containerPath: /kube
+EOF
+        done
+fi
+}
 
-#checking the main components
-DOCKER_DIR="/srv/docker"
-VERSION="v1.20.2"
-REQUIRED_PKG="apache2-utils"
-LOCAL_REGISTRY_DIR="${DOCKER_DIR}/local_registry"
-LOCAL_REGISTRY_NAME='kind-registry'
-LOCAL_REGISTRY_PORT='5000'
 
+create_controlplane (){
+cat << EOF >> ${CONFIG_YAML}
+- role: control-plane
+  image: kindest/node:${VERSION}
+  extraMounts:
+    - hostPath: ${DOCKER_DIR}/${CLUSTERNAME}
+      containerPath: /kube
+EOF
+if [ ! -z $PORTSMAPPING ]; then
+cat << EOF >> ${CONFIG_YAML}
+  extraPortMappings:
+EOF
 
-check_dockerdir
-
-while getopts n:i:p:hr flag
-do
-    case "${flag}" in
-        n) clustername=${OPTARG};;
-        i) iface=${OPTARG};;
-        p) portnumber=${OPTARG};;
-	h) help ;;
-	r) registry=1 ;;
-    esac
+for i in ${PORTSMAPPING//,/ }
+    do
+    cat << EOF >> ${CONFIG_YAML}
+  - containerPort: ${i}
+    hostPort: ${i}
+    protocol: TCP
+EOF
 done
-
-if [ -z ${clustername} ]; then
-	clustername="kind"
 fi
 
-#creating the config file yaml
-var=${clustername}'_config.yaml'
+}
 
-cat << EOF > ${var}
+create_configyaml(){
+cat << EOF > ${CONFIG_YAML}
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 EOF
 
-if [ ! -z ${iface} ] || [ ! -z ${portnumber} ]; then
-cat << EOF >> ${var}
+if [ ! -z ${IFACE} ] || [ ! -z ${PORTNUMBER} ]; then
+cat << EOF >> ${CONFIG_YAML}
 networking:
 EOF
-if [ ! -z ${iface} ]; then
-  cat << EOF >> ${var}
-  apiServerAddress: "$(ifconfig ${iface} | grep -oP '(?<=inet\s)([0-9]{1,3}\.){3}[0-9]{1,3}(=?)')"
+if [ ! -z ${IFACE} ]; then
+  cat << EOF >> ${CONFIG_YAML}
+  apiServerAddress: "$(ifconfig ${IFACE} | grep -oP '(?<=inet\s)([0-9]{1,3}\.){3}[0-9]{1,3}(=?)')"
 EOF
 fi
-if [ ! -z ${portnumber} ]; then
-  cat << EOF >> ${var}
-  apiServerPort: ${portnumber}
+if [ ! -z ${PORTNUMBER} ]; then
+  cat << EOF >> ${CONFIG_YAML}
+  apiServerPort: ${PORTNUMBER}
 EOF
 fi
 fi
 
-if [ ! -z $registry ]; then
-    cat << EOF >> ${var}
+if [ ! -z ${REGISTRY} ]; then
+    cat << EOF >> ${CONFIG_YAML}
 containerdConfigPatches:
 - |-
   [plugins."io.containerd.grpc.v1.cri".registry.mirrors."localhost:${LOCAL_REGISTRY_PORT}"]
@@ -171,42 +180,19 @@ EOF
     create_registry ${DOCKER_DIR}
 fi
 
-cat << EOF >> ${var}
+cat << EOF >> ${CONFIG_YAML}
 nodes:
-- role: control-plane
-  image: kindest/node:${VERSION}
-  kubeadmConfigPatches:
-  - |
-    kind: InitConfiguration
-    nodeRegistration:
-      kubeletExtraArgs:
-        node-labels: "ingress-ready=true"
-  extraPortMappings:
-  - containerPort: 80
-    hostPort: 80
-    protocol: TCP
-  - containerPort: 443
-    hostPort: 443
-    protocol: TCP
 EOF
 
-if [ ! -d ${DOCKER_DIR}/${clustername} ]; then
-  mkdir ${DOCKER_DIR}/${clustername}
-fi
+}
 
-cat << EOF >> ${var}
-  extraMounts:
-    - hostPath: ${DOCKER_DIR}/${clustername}
-      containerPath: /kube
-EOF
 
-#starting the cluster
-kind create cluster --name ${clustername} --config=$var
+apply_registry_configmap(){
 
 #connect the registry to the cluster network, if it needs to be done
-if [ ! -z ${registry} ]; then
+if [ ! -z ${REGISTRY} ]; then
 
-docker network connect "kind" "${LOCAL_REGISTRY_NAME}" || true 
+docker network connect "kind" "${LOCAL_REGISTRY_NAME}" || true
 
 cat <<EOF | kubectl apply -f -
 apiVersion: v1
@@ -221,6 +207,64 @@ data:
 EOF
 fi
 
+}
+#=======================================================================================#
+#===================================== MAIN PART========================================#
+#=======================================================================================#
+
+# checking the main components
+DOCKER_DIR="/srv/docker"
+VERSION="v1.21.1"
+REQUIRED_PKG="apache2-utils"
+LOCAL_REGISTRY_DIR="${DOCKER_DIR}/local_registry"
+LOCAL_REGISTRY_NAME='kind-registry'
+LOCAL_REGISTRY_PORT='5000'
+
+
+while getopts e:n:w:i:p:hr flag
+do
+    case "${flag}" in
+        n) CLUSTERNAME=${OPTARG};;
+        i) IFACE=${OPTARG};;
+        p) PORTNUMBER=${OPTARG};;
+        w) WORKERS=${OPTARG} ;;
+    	h) show_help ;;
+	    r) REGISTRY=1 ;;
+        e) PORTSMAPPING=${OPTARG} ;;
+    esac
+done
+
+
+
+if [ -z ${CLUSTERNAME} ]; then
+	CLUSTERNAME="kind"
+fi
+
+# checking if docker dir exists as it would be necessary for PV
+check_dockerdir
+
+if [ ! -d ${DOCKER_DIR}/${CLUSTERNAME} ]; then
+  mkdir ${DOCKER_DIR}/${CLUSTERNAME}
+fi
+
+
+# creating the config file yaml
+CONFIG_YAML=${CLUSTERNAME}'_config.yaml'
+create_configyaml
+create_controlplane
+create_workers
+
+# starting the cluster
+kind create cluster --name ${CLUSTERNAME} --config=$CONFIG_YAML
+if [ "$?" -ne "0" ]; then
+    echo 
+    UNICORN='\U1F984';
+    echo -e "Oops, the ${UNICORN} is sad because something bad happened. Check the logs, fix the issue and try to rerun this script again... Exiting..."
+    exit 1
+fi
+# adding the registry to the cluster
+apply_registry_configmap
+
 
 echo 
 echo
@@ -229,4 +273,3 @@ echo "The kubeconfig's content for remote address"
 echo "===================================================================="
 cat ~/.kube/config 
 echo "===================================================================="
-
