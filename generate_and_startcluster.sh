@@ -133,6 +133,12 @@ cat << EOF >> ${CONFIG_YAML}
 EOF
 if [ ! -z $PORTSMAPPING ]; then
 cat << EOF >> ${CONFIG_YAML}
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "ingress-ready=true"
   extraPortMappings:
 EOF
 
@@ -145,6 +151,7 @@ for i in ${PORTSMAPPING//,/ }
 EOF
 done
 fi
+
 
 }
 
@@ -273,3 +280,13 @@ echo "The kubeconfig's content for remote address"
 echo "===================================================================="
 cat ~/.kube/config 
 echo "===================================================================="
+
+for i in {1..5}; do
+    echo
+done
+
+echo "Would you like to deploy Nginx-Ingress to the cluster? [y,n]"
+read nginx
+if [[ "${nginx}" == "Y" || "${nginx}" == "y" ]]; then
+    ./components/ingress-nginx/setup-ingress.sh
+fi
